@@ -1,0 +1,15 @@
+[package]
+name = "opentelemetry-datadog"
+version = "0.1.0"
+description = "DataDog integration with the OpenTelemetry crate, copied and adapted from opentelemetry-contrib https://github.com/open-telemetry/opentelemetry-rust/tree/master/opentelemetry-contrib."
+edition = "2018"
+
+[dependencies]
+indexmap = "1.6.0"
+lazy_static = "1.4"
+opentelemetry = "0.8.0"
+reqwest = { version = "0.10", features = ["blocking"] }
+rmp = "0.8"
+
+[dev-dependencies]
+base64 = "0.12.3"
