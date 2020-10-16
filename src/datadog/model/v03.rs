@@ -1,9 +1,13 @@
 use crate::datadog::model::Error;
 use opentelemetry::api::{Key, Value};
 use opentelemetry::exporter::trace;
+use std::sync::Arc;
 use std::time::SystemTime;
 
-pub(crate) fn encode(service_name: &str, spans: Vec<trace::SpanData>) -> Result<Vec<u8>, Error> {
+pub(crate) fn encode(
+    service_name: &str,
+    spans: Vec<Arc<trace::SpanData>>,
+) -> Result<Vec<u8>, Error> {
     let mut encoded = Vec::new();
     rmp::encode::write_array_len(&mut encoded, spans.len() as u32)?;
 
@@ -24,7 +28,9 @@ pub(crate) fn encode(service_name: &str, spans: Vec<trace::SpanData>) -> Result<
             .map(|x| x.as_nanos() as i64)
             .unwrap_or(0);
 
-        if let Some(Value::String(s)) = span.attributes.get(&Key::new("span.type")) {
+        if let Some(Value::String(s)) =
+            super::get_span_attribute(&span.attributes, &Key::new("span.type"))
+        {
             rmp::encode::write_map_len(&mut encoded, 11)?;
             rmp::encode::write_str(&mut encoded, "type")?;
             rmp::encode::write_str(&mut encoded, s.as_str())?;
@@ -37,7 +43,7 @@ pub(crate) fn encode(service_name: &str, spans: Vec<trace::SpanData>) -> Result<
         rmp::encode::write_str(&mut encoded, service_name)?;
 
         rmp::encode::write_str(&mut encoded, "name")?;
-        rmp::encode::write_str(&mut encoded, span.instrumentation_lib.name)?;
+        rmp::encode::write_str(&mut encoded, super::DEFAULT_INSTRUMENT_NAME)?;
 
         rmp::encode::write_str(&mut encoded, "resource")?;
         rmp::encode::write_str(&mut encoded, &span.name)?;
@@ -58,7 +64,7 @@ pub(crate) fn encode(service_name: &str, spans: Vec<trace::SpanData>) -> Result<
         rmp::encode::write_i64(&mut encoded, duration)?;
 
         rmp::encode::write_str(&mut encoded, "error")?;
-        rmp::encode::write_i32(&mut encoded, span.status_code as i32)?;
+        rmp::encode::write_i32(&mut encoded, span.status_code.clone() as i32)?;
 
         rmp::encode::write_str(&mut encoded, "meta")?;
         rmp::encode::write_map_len(&mut encoded, span.attributes.len() as u32)?;

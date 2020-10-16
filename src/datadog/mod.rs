@@ -55,19 +55,17 @@
 //! [`DatadogPipelineBuilder`]: struct.DatadogPipelineBuilder.html
 //!
 //! ```no_run
-//! use opentelemetry::api::{KeyValue, trace::Tracer};
-//! use opentelemetry::sdk::{trace::{self, IdGenerator, Sampler}, Resource};
+//! use opentelemetry::api::{KeyValue, trace::tracer::Tracer};
+//! use opentelemetry::sdk::resource::Resource;
+//! use opentelemetry::sdk::trace;
+//! use opentelemetry::sdk::trace::id_generator::IdGenerator;
+//! use opentelemetry::sdk::trace::sampler::Sampler;
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let (tracer, _uninstall) = opentelemetry_contrib::datadog::new_pipeline()
+//!     let tracer = octo_doggo::datadog::new_pipeline()
 //!         .with_service_name("my_app")
-//!         .with_version(opentelemetry_contrib::datadog::ApiVersion::Version05)
+//!         .with_version(octo_doggo::datadog::ApiVersion::Version05)
 //!         .with_agent_endpoint("http://localhost:8126")
-//!         .with_trace_config(
-//!             trace::config()
-//!                 .with_default_sampler(Sampler::AlwaysOn)
-//!                 .with_id_generator(IdGenerator::default())
-//!         )
 //!         .install()?;
 //!
 //!     tracer.in_span("doing_work", |cx| {
@@ -85,11 +83,11 @@ mod model;
 
 pub use model::ApiVersion;
 
-use async_trait::async_trait;
-use opentelemetry::{api::trace::TracerProvider, exporter::trace, global, sdk};
+use opentelemetry::{api::trace::provider::Provider, exporter::trace, global, sdk};
 use reqwest::header::CONTENT_TYPE;
 use reqwest::Url;
 use std::error::Error;
+use std::sync::Arc;
 
 /// Default Datadog collector endpoint
 const DEFAULT_AGENT_ENDPOINT: &str = "http://127.0.0.1:8126";
@@ -100,7 +98,7 @@ const DEFAULT_SERVICE_NAME: &str = "OpenTelemetry";
 /// Datadog span exporter
 #[derive(Debug)]
 pub struct DatadogExporter {
-    client: reqwest::Client,
+    client: reqwest::blocking::Client,
     request_url: Url,
     service_name: String,
     version: ApiVersion,
@@ -112,7 +110,7 @@ impl DatadogExporter {
         request_url.set_path(version.path());
 
         DatadogExporter {
-            client: reqwest::Client::new(),
+            client: reqwest::blocking::Client::new(),
             request_url,
             service_name,
             version,
@@ -130,7 +128,7 @@ pub fn new_pipeline() -> DatadogPipelineBuilder {
 pub struct DatadogPipelineBuilder {
     service_name: String,
     agent_endpoint: String,
-    trace_config: Option<sdk::trace::Config>,
+    trace_config: Option<sdk::trace::config::Config>,
     version: ApiVersion,
 }
 
@@ -147,22 +145,23 @@ impl Default for DatadogPipelineBuilder {
 
 impl DatadogPipelineBuilder {
     /// Create `ExporterConfig` struct from current `ExporterConfigBuilder`
-    pub fn install(mut self) -> Result<(sdk::trace::Tracer, Uninstall), Box<dyn Error>> {
+    pub fn install(mut self) -> Result<sdk::trace::tracer::Tracer, Box<dyn Error>> {
         let exporter = DatadogExporter::new(
             self.service_name.clone(),
             self.agent_endpoint.parse()?,
             self.version,
         );
 
-        let mut provider_builder = sdk::trace::TracerProvider::builder().with_exporter(exporter);
+        let mut provider_builder =
+            sdk::trace::provider::Provider::builder().with_simple_exporter(exporter);
         if let Some(config) = self.trace_config.take() {
             provider_builder = provider_builder.with_config(config);
         }
         let provider = provider_builder.build();
-        let tracer = provider.get_tracer("opentelemetry-datadog", Some(env!("CARGO_PKG_VERSION")));
-        let provider_guard = global::set_tracer_provider(provider);
+        let tracer = provider.get_tracer("opentelemetry-datadog");
+        let _provider_guard = global::set_provider(provider);
 
-        Ok((tracer, Uninstall(provider_guard)))
+        Ok(tracer)
     }
 
     /// Assign the service name under which to group traces
@@ -178,7 +177,7 @@ impl DatadogPipelineBuilder {
     }
 
     /// Assign the SDK trace configuration
-    pub fn with_trace_config(mut self, config: sdk::trace::Config) -> Self {
+    pub fn with_trace_config(mut self, config: sdk::trace::config::Config) -> Self {
         self.trace_config = Some(config);
         self
     }
@@ -190,10 +189,9 @@ impl DatadogPipelineBuilder {
     }
 }
 
-#[async_trait]
 impl trace::SpanExporter for DatadogExporter {
     /// Export spans to datadog-agent
-    async fn export(&self, batch: Vec<trace::SpanData>) -> trace::ExportResult {
+    fn export(&self, batch: Vec<Arc<trace::SpanData>>) -> trace::ExportResult {
         let data = match self.version.encode(&self.service_name, batch) {
             Ok(data) => data,
             Err(_) => return trace::ExportResult::FailedNotRetryable,
@@ -204,16 +202,13 @@ impl trace::SpanExporter for DatadogExporter {
             .post(self.request_url.clone())
             .header(CONTENT_TYPE, self.version.content_type())
             .body(data)
-            .send()
-            .await;
+            .send();
 
         match resp {
             Ok(response) if response.status().is_success() => trace::ExportResult::Success,
             _ => trace::ExportResult::FailedRetryable,
         }
     }
-}
 
-/// Uninstalls the Datadog pipeline on drop
-#[derive(Debug)]
-pub struct Uninstall(global::TracerProviderGuard);
+    fn shutdown(&self) {}
+}

@@ -4,5 +4,4 @@
 //! some users.
 //!
 //! Typically, those include vendor specific propagators.
-#[cfg(feature = "datadog")]
 pub mod datadog;

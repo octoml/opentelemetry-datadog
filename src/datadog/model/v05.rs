@@ -2,6 +2,7 @@ use crate::datadog::intern::StringInterner;
 use crate::datadog::model::Error;
 use opentelemetry::api::{Key, Value};
 use opentelemetry::exporter::trace;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 // Protocol documentation sourced from https://github.com/DataDog/datadog-agent/blob/c076ea9a1ffbde4c76d35343dbc32aecbbf99cb9/pkg/trace/api/version.go
@@ -49,7 +50,10 @@ use std::time::SystemTime;
 //
 // 		The dictionary in this case would be []string{""}, having only the empty string at index 0.
 //
-pub(crate) fn encode(service_name: &str, spans: Vec<trace::SpanData>) -> Result<Vec<u8>, Error> {
+pub(crate) fn encode(
+    service_name: &str,
+    spans: Vec<Arc<trace::SpanData>>,
+) -> Result<Vec<u8>, Error> {
     let mut interner = StringInterner::new();
     let mut encoded_spans = encode_spans(&mut interner, service_name, spans)?;
 
@@ -69,7 +73,7 @@ pub(crate) fn encode(service_name: &str, spans: Vec<trace::SpanData>) -> Result<
 fn encode_spans(
     interner: &mut StringInterner,
     service_name: &str,
-    spans: Vec<trace::SpanData>,
+    spans: Vec<Arc<trace::SpanData>>,
 ) -> Result<Vec<u8>, Error> {
     let mut encoded = Vec::new();
     rmp::encode::write_array_len(&mut encoded, spans.len() as u32)?;
@@ -93,7 +97,7 @@ fn encode_spans(
             .map(|x| x.as_nanos() as i64)
             .unwrap_or(0);
 
-        let span_type = match span.attributes.get(&Key::new("span.type")) {
+        let span_type = match super::get_span_attribute(&span.attributes, &Key::new("span.type")) {
             Some(Value::String(s)) => interner.intern(s.as_str()),
             _ => interner.intern(""),
         };
@@ -101,14 +105,17 @@ fn encode_spans(
         // Datadog span name is OpenTelemetry component name - see module docs for more information
         rmp::encode::write_array_len(&mut encoded, 12)?;
         rmp::encode::write_u32(&mut encoded, service_interned)?;
-        rmp::encode::write_u32(&mut encoded, interner.intern(span.instrumentation_lib.name))?;
+        rmp::encode::write_u32(
+            &mut encoded,
+            interner.intern(super::DEFAULT_INSTRUMENT_NAME),
+        )?;
         rmp::encode::write_u32(&mut encoded, interner.intern(&span.name))?;
         rmp::encode::write_u64(&mut encoded, span.span_context.trace_id().to_u128() as u64)?;
         rmp::encode::write_u64(&mut encoded, span.span_context.span_id().to_u64())?;
         rmp::encode::write_u64(&mut encoded, span.parent_span_id.to_u64())?;
         rmp::encode::write_i64(&mut encoded, start)?;
         rmp::encode::write_i64(&mut encoded, duration)?;
-        rmp::encode::write_i32(&mut encoded, span.status_code as i32)?;
+        rmp::encode::write_i32(&mut encoded, span.status_code.clone() as i32)?;
         rmp::encode::write_map_len(&mut encoded, span.attributes.len() as u32)?;
         for (key, value) in span.attributes.iter() {
             let value_string: String = value.into();
